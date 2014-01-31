@@ -84,7 +84,7 @@ htm_available ()
       unsigned a, b, c, d;
       __cpuid_count (7, 0, a, b, c, d);
       if (b & cpuid_rtm)
-	return true;
+  return true;
     }
   return false;
 }

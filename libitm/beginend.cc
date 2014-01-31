@@ -190,8 +190,18 @@ GTM::gtm_thread::begin_transaction (uint32_t prop, const gtm_jmpbuf *jb)
 #ifndef HTM_CUSTOM_FASTPATH
   if (likely(htm_fastpath && (prop & pr_hasNoAbort)))
     {
+      tx = gtm_thr();
+      if (unlikely(tx == NULL))
+        {
+          // See below.
+          tx = new gtm_thread();
+          set_gtm_thr(tx);
+        }
       for (uint32_t t = htm_fastpath; t; t--)
     {
+        if (t != htm_fastpath)
+            tx->restart_reason[RESTART_HTM]++;
+
       uint32_t ret = htm_begin();
       if (htm_begin_success(ret))
         {
@@ -711,17 +721,18 @@ void _GTM_dump_stats()
     int i = 0;
     for (gtm_thread *it = gtm_thread::list_of_threads; it != 0; it = it->next_thread) {
         printf("Thread %d:\n", i++);
-        printf("  c=%d\n", t->commit_count);
-        printf("  RESTART_REALLOCATE=%d\n", t->restart_reason[RESTART_REALLOCATE]);
-        printf("  RESTART_LOCKED_READ=%d\n", t->restart_reason[RESTART_LOCKED_READ]);
-        printf("  RESTART_LOCKED_WRITE=%d\n", t->restart_reason[RESTART_LOCKED_WRITE]);
-        printf("  RESTART_VALIDATE_READ=%d\n", t->restart_reason[RESTART_VALIDATE_READ]);
-        printf("  RESTART_VALIDATE_WRITE=%d\n", t->restart_reason[RESTART_VALIDATE_WRITE]);
-        printf("  RESTART_VALIDATE_COMMIT=%d\n", t->restart_reason[RESTART_VALIDATE_COMMIT]);
-        printf("  RESTART_SERIAL_IRR=%d\n", t->restart_reason[RESTART_SERIAL_IRR]);
-        printf("  RESTART_NOT_READONLY=%d\n", t->restart_reason[RESTART_NOT_READONLY]);
-        printf("  RESTART_CLOSED_NESTING=%d\n", t->restart_reason[RESTART_CLOSED_NESTING]);
-        printf("  RESTART_INIT_METHOD_GROUP=%d\n", t->restart_reason[RESTART_INIT_METHOD_GROUP]);
+        printf("  c=%d\n", it->commit_count);
+        printf("  RESTART_REALLOCATE=%d\n", it->restart_reason[RESTART_REALLOCATE]);
+        printf("  RESTART_LOCKED_READ=%d\n", it->restart_reason[RESTART_LOCKED_READ]);
+        printf("  RESTART_LOCKED_WRITE=%d\n", it->restart_reason[RESTART_LOCKED_WRITE]);
+        printf("  RESTART_VALIDATE_READ=%d\n", it->restart_reason[RESTART_VALIDATE_READ]);
+        printf("  RESTART_VALIDATE_WRITE=%d\n", it->restart_reason[RESTART_VALIDATE_WRITE]);
+        printf("  RESTART_VALIDATE_COMMIT=%d\n", it->restart_reason[RESTART_VALIDATE_COMMIT]);
+        printf("  RESTART_SERIAL_IRR=%d\n", it->restart_reason[RESTART_SERIAL_IRR]);
+        printf("  RESTART_NOT_READONLY=%d\n", it->restart_reason[RESTART_NOT_READONLY]);
+        printf("  RESTART_CLOSED_NESTING=%d\n", it->restart_reason[RESTART_CLOSED_NESTING]);
+        printf("  RESTART_INIT_METHOD_GROUP=%d\n", it->restart_reason[RESTART_INIT_METHOD_GROUP]);
+        printf("  RESTART_HTM=%d\n", it->restart_reason[RESTART_HTM]);
     }
 }
 

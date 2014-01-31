@@ -38,12 +38,12 @@ extern "C" {
 
 #ifdef __i386__
 /* Only for 32-bit x86.  */
-# define ITM_REGPARM	__attribute__((regparm(2)))
+# define ITM_REGPARM  __attribute__((regparm(2)))
 #else
 # define ITM_REGPARM
 #endif
 
-#define ITM_NORETURN	__attribute__((noreturn))
+#define ITM_NORETURN  __attribute__((noreturn))
 #define ITM_PURE __attribute__((transaction_pure))
 
 /* The following are externally visible definitions and functions, though
@@ -77,31 +77,31 @@ typedef enum
    implementations, so update those too when applying any changes.  */
 typedef enum
 {
-   pr_instrumentedCode		= 0x0001,
-   pr_uninstrumentedCode	= 0x0002,
-   pr_multiwayCode		= pr_instrumentedCode | pr_uninstrumentedCode,
+   pr_instrumentedCode    = 0x0001,
+   pr_uninstrumentedCode  = 0x0002,
+   pr_multiwayCode    = pr_instrumentedCode | pr_uninstrumentedCode,
    /* Called pr_hasNoXMMUpdate in the Intel document, used for
       avoiding vector register save/restore for any target.  */
-   pr_hasNoVectorUpdate		= 0x0004,
-   pr_hasNoAbort		= 0x0008,
+   pr_hasNoVectorUpdate   = 0x0004,
+   pr_hasNoAbort    = 0x0008,
    /* Not present in the Intel document, used for avoiding
       floating point register save/restore for any target.  */
-   pr_hasNoFloatUpdate		= 0x0010,
-   pr_hasNoIrrevocable		= 0x0020,
-   pr_doesGoIrrevocable		= 0x0040,
-   pr_aWBarriersOmitted		= 0x0100,
-   pr_RaRBarriersOmitted	= 0x0200,
-   pr_undoLogCode		= 0x0400,
-   pr_preferUninstrumented	= 0x0800,
+   pr_hasNoFloatUpdate    = 0x0010,
+   pr_hasNoIrrevocable    = 0x0020,
+   pr_doesGoIrrevocable   = 0x0040,
+   pr_aWBarriersOmitted   = 0x0100,
+   pr_RaRBarriersOmitted  = 0x0200,
+   pr_undoLogCode   = 0x0400,
+   pr_preferUninstrumented  = 0x0800,
    /* Exception blocks are not used nor supported. */
-   pr_exceptionBlock		= 0x1000,
-   pr_hasElse			= 0x2000,
-   pr_readOnly			= 0x4000,
-   pr_hasNoSimpleReads		= 0x400000,
+   pr_exceptionBlock    = 0x1000,
+   pr_hasElse     = 0x2000,
+   pr_readOnly      = 0x4000,
+   pr_hasNoSimpleReads    = 0x400000,
    /* These are not part of the ABI but used for custom HTM fast paths.  See
       ITM_beginTransaction and gtm_thread::begin_transaction.  */
-   pr_HTMRetryableAbort		= 0x800000,
-   pr_HTMRetriedAfterAbort	= 0x1000000
+   pr_HTMRetryableAbort   = 0x800000,
+   pr_HTMRetriedAfterAbort  = 0x1000000
 } _ITM_codeProperties;
 
 /* Result from startTransaction that describes what actions to take.
@@ -140,8 +140,8 @@ void _ITM_error(const _ITM_srcLocation *, int errorCode)
 
 extern _ITM_howExecuting _ITM_inTransaction(void) ITM_REGPARM;
 
-typedef uint64_t _ITM_transactionId_t;	/* Transaction identifier */
-#define _ITM_noTransactionId 1		/* Id for non-transactional code. */
+typedef uint64_t _ITM_transactionId_t;  /* Transaction identifier */
+#define _ITM_noTransactionId 1    /* Id for non-transactional code. */
 
 extern _ITM_transactionId_t _ITM_getTransactionId(void) ITM_REGPARM;
 
@@ -154,7 +154,7 @@ extern void _ITM_commitTransaction (void) ITM_REGPARM;
 extern void _ITM_changeTransactionMode (_ITM_transactionState) ITM_REGPARM;
 
 extern void _ITM_addUserCommitAction(_ITM_userCommitFunction,
-				     _ITM_transactionId_t, void *) ITM_REGPARM;
+             _ITM_transactionId_t, void *) ITM_REGPARM;
 
 extern void _ITM_addUserUndoAction(_ITM_userUndoFunction, void *) ITM_REGPARM;
 
@@ -183,12 +183,12 @@ typedef double _Complex _ITM_TYPE_CD;
 typedef long double _Complex _ITM_TYPE_CE;
 
 #define ITM_BARRIERS(T) \
-  extern _ITM_TYPE_##T _ITM_R##T(const _ITM_TYPE_##T *) ITM_REGPARM;	\
-  extern _ITM_TYPE_##T _ITM_RaR##T(const _ITM_TYPE_##T *) ITM_REGPARM;	\
-  extern _ITM_TYPE_##T _ITM_RaW##T(const _ITM_TYPE_##T *) ITM_REGPARM;	\
-  extern _ITM_TYPE_##T _ITM_RfW##T(const _ITM_TYPE_##T *) ITM_REGPARM;	\
-  extern void _ITM_W##T (_ITM_TYPE_##T *, _ITM_TYPE_##T) ITM_REGPARM;	\
-  extern void _ITM_WaR##T (_ITM_TYPE_##T *, _ITM_TYPE_##T) ITM_REGPARM;	\
+  extern _ITM_TYPE_##T _ITM_R##T(const _ITM_TYPE_##T *) ITM_REGPARM;  \
+  extern _ITM_TYPE_##T _ITM_RaR##T(const _ITM_TYPE_##T *) ITM_REGPARM;  \
+  extern _ITM_TYPE_##T _ITM_RaW##T(const _ITM_TYPE_##T *) ITM_REGPARM;  \
+  extern _ITM_TYPE_##T _ITM_RfW##T(const _ITM_TYPE_##T *) ITM_REGPARM;  \
+  extern void _ITM_W##T (_ITM_TYPE_##T *, _ITM_TYPE_##T) ITM_REGPARM; \
+  extern void _ITM_WaR##T (_ITM_TYPE_##T *, _ITM_TYPE_##T) ITM_REGPARM; \
   extern void _ITM_WaW##T (_ITM_TYPE_##T *, _ITM_TYPE_##T) ITM_REGPARM;
 
 ITM_BARRIERS(U1)
@@ -287,6 +287,9 @@ extern void _ITM_cxa_throw (void *obj, void *tinfo, void *dest);
 extern void *_ITM_cxa_begin_catch (void *exc_ptr);
 extern void _ITM_cxa_end_catch (void);
 extern void _ITM_commitTransactionEH(void *exc_ptr) ITM_REGPARM;
+
+// [mfs] Local additions
+extern void _GTM_dump_stats (void);
 
 #ifdef __cplusplus
 } /* extern "C" */
