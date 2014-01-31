@@ -179,6 +179,8 @@ LIBITM_1.0 {
 	_ITM_cxa_end_catch;
 	_ITM_cxa_throw;
 
+        _GTM_dump_stats;
+        
   local:
 	*;
 };

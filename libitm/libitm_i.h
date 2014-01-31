@@ -242,6 +242,10 @@ struct gtm_thread
   uint32_t restart_reason[NUM_RESTARTS];
   uint32_t restart_total;
 
+  // [mfs] One more variable for counting the number of committed
+  // transactions
+  uint32_t commit_count;
+
   // *** The shared part of gtm_thread starts here. ***
   // Shared state is on separate cachelines to avoid false sharing with
   // thread-local parts of gtm_thread.

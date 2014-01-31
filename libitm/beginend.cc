@@ -107,10 +107,10 @@ GTM::gtm_thread::~gtm_thread()
   for (; *prev; prev = &(*prev)->next_thread)
     {
       if (*prev == this)
-	{
-	  *prev = (*prev)->next_thread;
-	  break;
-	}
+    {
+      *prev = (*prev)->next_thread;
+      break;
+    }
     }
   number_of_threads--;
   number_of_threads_changed(number_of_threads + 1, number_of_threads);
@@ -191,52 +191,52 @@ GTM::gtm_thread::begin_transaction (uint32_t prop, const gtm_jmpbuf *jb)
   if (likely(htm_fastpath && (prop & pr_hasNoAbort)))
     {
       for (uint32_t t = htm_fastpath; t; t--)
-	{
-	  uint32_t ret = htm_begin();
-	  if (htm_begin_success(ret))
-	    {
-	      // We are executing a transaction now.
-	      // Monitor the writer flag in the serial-mode lock, and abort
-	      // if there is an active or waiting serial-mode transaction.
-	      // Note that this can also happen due to an enclosing
-	      // serial-mode transaction; we handle this case below.
-	      if (unlikely(serial_lock.is_write_locked()))
-		htm_abort();
-	      else
-		// We do not need to set a_saveLiveVariables because of HTM.
-		return (prop & pr_uninstrumentedCode) ?
-		    a_runUninstrumentedCode : a_runInstrumentedCode;
-	    }
-	  // The transaction has aborted.  Don't retry if it's unlikely that
-	  // retrying the transaction will be successful.
-	  if (!htm_abort_should_retry(ret))
-	    break;
-	  // Wait until any concurrent serial-mode transactions have finished.
-	  // This is an empty critical section, but won't be elided.
-	  if (serial_lock.is_write_locked())
-	    {
-	      tx = gtm_thr();
-	      if (unlikely(tx == NULL))
-	        {
-	          // See below.
-	          tx = new gtm_thread();
-	          set_gtm_thr(tx);
-	        }
-	      // Check whether there is an enclosing serial-mode transaction;
-	      // if so, we just continue as a nested transaction and don't
-	      // try to use the HTM fastpath.  This case can happen when an
-	      // outermost relaxed transaction calls unsafe code that starts
-	      // a transaction.
-	      if (tx->nesting > 0)
-		break;
-	      // Another thread is running a serial-mode transaction.  Wait.
-	      serial_lock.read_lock(tx);
-	      serial_lock.read_unlock(tx);
-	      // TODO We should probably reset the retry count t here, unless
-	      // we have retried so often that we should go serial to avoid
-	      // starvation.
-	    }
-	}
+    {
+      uint32_t ret = htm_begin();
+      if (htm_begin_success(ret))
+        {
+          // We are executing a transaction now.
+          // Monitor the writer flag in the serial-mode lock, and abort
+          // if there is an active or waiting serial-mode transaction.
+          // Note that this can also happen due to an enclosing
+          // serial-mode transaction; we handle this case below.
+          if (unlikely(serial_lock.is_write_locked()))
+        htm_abort();
+          else
+        // We do not need to set a_saveLiveVariables because of HTM.
+        return (prop & pr_uninstrumentedCode) ?
+            a_runUninstrumentedCode : a_runInstrumentedCode;
+        }
+      // The transaction has aborted.  Don't retry if it's unlikely that
+      // retrying the transaction will be successful.
+      if (!htm_abort_should_retry(ret))
+        break;
+      // Wait until any concurrent serial-mode transactions have finished.
+      // This is an empty critical section, but won't be elided.
+      if (serial_lock.is_write_locked())
+        {
+          tx = gtm_thr();
+          if (unlikely(tx == NULL))
+            {
+              // See below.
+              tx = new gtm_thread();
+              set_gtm_thr(tx);
+            }
+          // Check whether there is an enclosing serial-mode transaction;
+          // if so, we just continue as a nested transaction and don't
+          // try to use the HTM fastpath.  This case can happen when an
+          // outermost relaxed transaction calls unsafe code that starts
+          // a transaction.
+          if (tx->nesting > 0)
+        break;
+          // Another thread is running a serial-mode transaction.  Wait.
+          serial_lock.read_lock(tx);
+          serial_lock.read_unlock(tx);
+          // TODO We should probably reset the retry count t here, unless
+          // we have retried so often that we should go serial to avoid
+          // starvation.
+        }
+    }
     }
 #else
   // If we have a custom HTM fastpath in ITM_beginTransaction, we implement
@@ -262,22 +262,22 @@ GTM::gtm_thread::begin_transaction (uint32_t prop, const gtm_jmpbuf *jb)
       // other fallback will use serial transactions, which don't use
       // restart_total but will reset it when committing.
       if (!(prop & pr_HTMRetriedAfterAbort))
-	tx->restart_total = htm_fastpath;
+    tx->restart_total = htm_fastpath;
 
       if (--tx->restart_total > 0)
-	{
-	  // Wait until any concurrent serial-mode transactions have finished.
-	  // Essentially the same code as above.
-	  if (serial_lock.is_write_locked())
-	    {
-	      if (tx->nesting > 0)
-		goto stop_custom_htm_fastpath;
-	      serial_lock.read_lock(tx);
-	      serial_lock.read_unlock(tx);
-	    }
-	  // Let ITM_beginTransaction retry the custom HTM fastpath.
-	  return a_tryHTMFastPath;
-	}
+    {
+      // Wait until any concurrent serial-mode transactions have finished.
+      // Essentially the same code as above.
+      if (serial_lock.is_write_locked())
+        {
+          if (tx->nesting > 0)
+        goto stop_custom_htm_fastpath;
+          serial_lock.read_lock(tx);
+          serial_lock.read_unlock(tx);
+        }
+      // Let ITM_beginTransaction retry the custom HTM fastpath.
+      return a_tryHTMFastPath;
+    }
     }
  stop_custom_htm_fastpath:
 #endif
@@ -306,19 +306,19 @@ GTM::gtm_thread::begin_transaction (uint32_t prop, const gtm_jmpbuf *jb)
       // ??? For pr_readOnly, lexical or dynamic scope is unspecified.
 
       if (prop & pr_hasNoAbort)
-	{
-	  // We can use flat nesting, so elide this transaction.
-	  if (!(prop & pr_instrumentedCode))
-	    {
-	      if (!(tx->state & STATE_SERIAL) ||
-		  !(tx->state & STATE_IRREVOCABLE))
-		tx->serialirr_mode();
-	    }
-	  // Increment nesting level after checking that we have a method that
-	  // allows us to continue.
-	  tx->nesting++;
-	  return choose_code_path(prop, abi_disp());
-	}
+    {
+      // We can use flat nesting, so elide this transaction.
+      if (!(prop & pr_instrumentedCode))
+        {
+          if (!(tx->state & STATE_SERIAL) ||
+          !(tx->state & STATE_IRREVOCABLE))
+        tx->serialirr_mode();
+        }
+      // Increment nesting level after checking that we have a method that
+      // allows us to continue.
+      tx->nesting++;
+      return choose_code_path(prop, abi_disp());
+    }
 
       // The transaction might abort, so use closed nesting if possible.
       // pr_hasNoAbort has lexical scope, so the compiler should really have
@@ -336,18 +336,18 @@ GTM::gtm_thread::begin_transaction (uint32_t prop, const gtm_jmpbuf *jb)
       // restart in _ITM_abortTransaction when we really have to.
       disp = abi_disp();
       if (!disp->closed_nesting())
-	{
-	  // ??? Should we elide the transaction if there is no alternative
-	  // method that supports closed nesting? If we do, we need to set
-	  // some flag to prevent _ITM_abortTransaction from aborting the
-	  // wrong transaction (i.e., some parent transaction).
-	  abi_dispatch *cn_disp = disp->closed_nesting_alternative();
-	  if (cn_disp)
-	    {
-	      disp = cn_disp;
-	      set_abi_disp(disp);
-	    }
-	}
+    {
+      // ??? Should we elide the transaction if there is no alternative
+      // method that supports closed nesting? If we do, we need to set
+      // some flag to prevent _ITM_abortTransaction from aborting the
+      // wrong transaction (i.e., some parent transaction).
+      abi_dispatch *cn_disp = disp->closed_nesting_alternative();
+      if (cn_disp)
+        {
+          disp = cn_disp;
+          set_abi_disp(disp);
+        }
+    }
     }
   else
     {
@@ -459,7 +459,7 @@ GTM::gtm_thread::rollback (gtm_transaction_cp *cp, bool aborting)
       id = cp->id;
       prop = cp->prop;
       if (cp->disp != abi_disp())
-	set_abi_disp(cp->disp);
+    set_abi_disp(cp->disp);
       memcpy(&alloc_actions, &cp->alloc_actions, sizeof(alloc_actions));
       nesting = cp->nesting;
     }
@@ -469,11 +469,11 @@ GTM::gtm_thread::rollback (gtm_transaction_cp *cp, bool aborting)
       // Restore the jump buffer and transaction properties, which we will
       // need for the longjmp used to restart or abort the transaction.
       if (parent_txns.size() > 0)
-	{
-	  jb = parent_txns[0].jb;
-	  id = parent_txns[0].id;
-	  prop = parent_txns[0].prop;
-	}
+    {
+      jb = parent_txns[0].jb;
+      id = parent_txns[0].id;
+      prop = parent_txns[0].prop;
+    }
       // Reset the transaction. Do not reset this->state, which is handled by
       // the callers. Note that if we are not aborting, we reset the
       // transaction to the point after having executed begin_transaction
@@ -508,7 +508,7 @@ _ITM_abortTransaction (_ITM_abortReason reason)
       // restart with a method that supports closed nesting.
       abi_dispatch *disp = abi_disp();
       if (!disp->closed_nesting())
-	tx->restart(RESTART_CLOSED_NESTING);
+    tx->restart(RESTART_CLOSED_NESTING);
 
       // The innermost transaction is a closed nested transaction.
       gtm_transaction_cp *cp = tx->parent_txns.pop();
@@ -519,7 +519,7 @@ _ITM_abortTransaction (_ITM_abortReason reason)
 
       // Jump to nested transaction (use the saved jump buffer).
       GTM_longjmp (a_abortTransaction | a_restoreLiveVariables,
-		   &longjmp_jb, longjmp_prop);
+           &longjmp_jb, longjmp_prop);
     }
   else
     {
@@ -530,13 +530,13 @@ _ITM_abortTransaction (_ITM_abortReason reason)
       // Aborting an outermost transaction finishes execution of the whole
       // transaction. Therefore, reset transaction state.
       if (tx->state & gtm_thread::STATE_SERIAL)
-	gtm_thread::serial_lock.write_unlock ();
+    gtm_thread::serial_lock.write_unlock ();
       else
-	gtm_thread::serial_lock.read_unlock (tx);
+    gtm_thread::serial_lock.read_unlock (tx);
       tx->state = 0;
 
       GTM_longjmp (a_abortTransaction | a_restoreLiveVariables,
-		   &tx->jb, tx->prop);
+           &tx->jb, tx->prop);
     }
 }
 
@@ -548,7 +548,10 @@ GTM::gtm_thread::trycommit ()
   // Skip any real commit for elided transactions.
   if (nesting > 0 && (parent_txns.size() == 0 ||
       nesting > parent_txns[parent_txns.size() - 1].nesting))
-    return true;
+    {
+      ++restart_total; // [mfs] addition
+      return true;
+    }
 
   if (nesting > 0)
     {
@@ -574,7 +577,7 @@ GTM::gtm_thread::trycommit ()
           priv_time = 0;
         }
       else
-	gtm_thread::serial_lock.read_unlock (this);
+    gtm_thread::serial_lock.read_unlock (this);
       state = 0;
 
       // We can commit the undo log after dispatch-specific commit and after
@@ -588,7 +591,7 @@ GTM::gtm_thread::trycommit ()
 
       // Ensure privatization safety, if necessary.
       if (priv_time)
-	{
+    {
           // There must be a seq_cst fence between the following loads of the
           // other transactions' shared_state and the dispatch-specific stores
           // that signal updates by this transaction (e.g., lock
@@ -597,29 +600,30 @@ GTM::gtm_thread::trycommit ()
           // readers will observe our updates.  We can reuse the seq_cst fence
           // in serial_lock.read_unlock() however, so we don't need another
           // one here.
-	  // TODO Don't just spin but also block using cond vars / futexes
-	  // here. Should probably be integrated with the serial lock code.
-	  for (gtm_thread *it = gtm_thread::list_of_threads; it != 0;
-	      it = it->next_thread)
-	    {
-	      if (it == this) continue;
-	      // We need to load other threads' shared_state using acquire
-	      // semantics (matching the release semantics of the respective
-	      // updates).  This is necessary to ensure that the other
-	      // threads' memory accesses happen before our actions that
-	      // assume privatization safety.
-	      // TODO Are there any platform-specific optimizations (e.g.,
-	      // merging barriers)?
-	      while (it->shared_state.load(memory_order_acquire) < priv_time)
-		cpu_relax();
-	    }
-	}
+      // TODO Don't just spin but also block using cond vars / futexes
+      // here. Should probably be integrated with the serial lock code.
+      for (gtm_thread *it = gtm_thread::list_of_threads; it != 0;
+          it = it->next_thread)
+        {
+          if (it == this) continue;
+          // We need to load other threads' shared_state using acquire
+          // semantics (matching the release semantics of the respective
+          // updates).  This is necessary to ensure that the other
+          // threads' memory accesses happen before our actions that
+          // assume privatization safety.
+          // TODO Are there any platform-specific optimizations (e.g.,
+          // merging barriers)?
+          while (it->shared_state.load(memory_order_acquire) < priv_time)
+        cpu_relax();
+        }
+    }
 
       // After ensuring privatization safety, we execute potentially
       // privatizing actions (e.g., calling free()). User actions are first.
       commit_user_actions ();
       commit_allocations (false, 0);
 
+      ++commit_count; // [mfs] addition
       return true;
     }
   return false;
@@ -651,7 +655,7 @@ GTM::gtm_thread::restart (gtm_restart_reason r, bool finish_serial_upgrade)
     }
 
   GTM_longjmp (choose_code_path(prop, disp) | a_restoreLiveVariables,
-	       &jb, prop);
+           &jb, prop);
 }
 
 void ITM_REGPARM
@@ -691,3 +695,33 @@ _ITM_commitTransactionEH(void *exc_ptr)
       tx->restart (RESTART_VALIDATE_COMMIT);
     }
 }
+
+// [mfs] To dump abort/commit stats, we provide the following extra
+// function, which is easily found
+extern "C" {
+  // forward declare printf
+  int printf(const char *format, ...);
+
+}
+
+// this should only be called explicitly from user code.  It's
+// 'extern C', so we should be able to find it easily at link time.
+void _GTM_dump_stats()
+{
+    int i = 0;
+    for (gtm_thread *it = gtm_thread::list_of_threads; it != 0; it = it->next_thread) {
+        printf("Thread %d:\n", i++);
+        printf("  c=%d\n", t->commit_count);
+        printf("  RESTART_REALLOCATE=%d\n", t->restart_reason[RESTART_REALLOCATE]);
+        printf("  RESTART_LOCKED_READ=%d\n", t->restart_reason[RESTART_LOCKED_READ]);
+        printf("  RESTART_LOCKED_WRITE=%d\n", t->restart_reason[RESTART_LOCKED_WRITE]);
+        printf("  RESTART_VALIDATE_READ=%d\n", t->restart_reason[RESTART_VALIDATE_READ]);
+        printf("  RESTART_VALIDATE_WRITE=%d\n", t->restart_reason[RESTART_VALIDATE_WRITE]);
+        printf("  RESTART_VALIDATE_COMMIT=%d\n", t->restart_reason[RESTART_VALIDATE_COMMIT]);
+        printf("  RESTART_SERIAL_IRR=%d\n", t->restart_reason[RESTART_SERIAL_IRR]);
+        printf("  RESTART_NOT_READONLY=%d\n", t->restart_reason[RESTART_NOT_READONLY]);
+        printf("  RESTART_CLOSED_NESTING=%d\n", t->restart_reason[RESTART_CLOSED_NESTING]);
+        printf("  RESTART_INIT_METHOD_GROUP=%d\n", t->restart_reason[RESTART_INIT_METHOD_GROUP]);
+    }
+}
+
