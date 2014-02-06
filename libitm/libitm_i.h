@@ -342,6 +342,7 @@ extern abi_dispatch *dispatch_serialirr_onwrite();
 extern abi_dispatch *dispatch_gl_wt();
 extern abi_dispatch *dispatch_ml_wt();
 extern abi_dispatch *dispatch_htm();
+extern abi_dispatch *dispatch_oreclazy();
 
 extern gtm_cacheline_mask gtm_mask_stack(gtm_cacheline *, gtm_cacheline_mask);
 
