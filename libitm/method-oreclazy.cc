@@ -32,14 +32,26 @@ namespace {
 // (or ownership records).
 struct oreclazy_mg : public method_group
 {
+  // method-wide definitions.  We have as much overlap with method-ml as
+  // is reasonable, deviating only when there is an algorithmic need
+  //
+  // NB: some of this code is unnecessary, but is preserved for the sake
+  //     of consistency with method-ml.  Note, too, that method-ml has
+  //     more documentation on /why/ these are implemented as they are.
+  
+  // methods for managing lock bits and overflow of the global timebase
+  //
+  // NB: There are no incarnation bits for this algorithm, since we don't
+  //     have undo logs
   static const gtm_word LOCK_BIT = (~(gtm_word)0 >> 1) + 1;
-  static const gtm_word INCARNATION_BITS = 3;
-  static const gtm_word INCARNATION_MASK = 7;
-  // Maximum time is all bits except the lock bit, the overflow reserve bit,
-  // and the incarnation bits).
-  static const gtm_word TIME_MAX = (~(gtm_word)0 >> (2 + INCARNATION_BITS));
-  // The overflow reserve bit is the MSB of the timestamp part of an orec,
-  // so we can have TIME_MAX+1 pending timestamp increases before we overflow.
+  // static const gtm_word INCARNATION_BITS = 3;
+  // static const gtm_word INCARNATION_MASK = 7;
+  // // Maximum time is all bits except the lock bit, the overflow reserve bit,
+  // // and the incarnation bits).
+  // static const gtm_word TIME_MAX = (~(gtm_word)0 >> (2 + INCARNATION_BITS));
+  static const gtm_word TIME_MAX = (~(gtm_word)0 >> 2);
+  // // The overflow reserve bit is the MSB of the timestamp part of an orec,
+  // // so we can have TIME_MAX+1 pending timestamp increases before we overflow.
   static const gtm_word OVERFLOW_RESERVE = TIME_MAX + 1;
 
   static bool is_locked(gtm_word o) { return o & LOCK_BIT; }
@@ -49,18 +61,18 @@ struct oreclazy_mg : public method_group
   }
   // Returns a time that includes the lock bit, which is required by both
   // validate() and is_more_recent_or_locked().
-  static gtm_word get_time(gtm_word o) { return o >> INCARNATION_BITS; }
-  static gtm_word set_time(gtm_word time) { return time << INCARNATION_BITS; }
+  static gtm_word get_time(gtm_word o) { return o /*>> INCARNATION_BITS*/; }
+  static gtm_word set_time(gtm_word time) { return time /*<< INCARNATION_BITS*/; }
   static bool is_more_recent_or_locked(gtm_word o, gtm_word than_time)
   {
     // LOCK_BIT is the MSB; thus, if O is locked, it is larger than TIME_MAX.
     return get_time(o) > than_time;
   }
-  static bool has_incarnation_left(gtm_word o)
-  {
-    return (o & INCARNATION_MASK) < INCARNATION_MASK;
-  }
-  static gtm_word inc_incarnation(gtm_word o) { return o + 1; }
+  //static bool has_incarnation_left(gtm_word o)
+  //{
+  //  return (o & INCARNATION_MASK) < INCARNATION_MASK;
+  //}
+  //static gtm_word inc_incarnation(gtm_word o) { return o + 1; }
 
   // The shared time base.
   atomic<gtm_word> time __attribute__((aligned(HW_CACHELINE_SIZE)));
@@ -136,82 +148,63 @@ static oreclazy_mg o_oreclazy_mg;
 class oreclazy_wt_dispatch : public abi_dispatch
 {
 protected:
-  static void pre_write(gtm_thread *tx, const void *addr, size_t len)
+  static void pre_write(gtm_thread *tx, const void *addr)
   {
     gtm_word snapshot = tx->shared_state.load(memory_order_relaxed);
     gtm_word locked_by_tx = oreclazy_mg::set_locked(tx);
 
     // Lock all orecs that cover the region.
     size_t orec = oreclazy_mg::get_orec(addr);
-    size_t orec_end = oreclazy_mg::get_orec_end(addr, len);
-    do
+    // [mfs] I believe there is a bug in GCC at this point in
+    //       method_ml: if we have wraparound in the orec list, due to
+    //       a *huge* range being pre-written, then this is going to
+    //       fail to lock the entire array of locks, and bad things
+    //       will happen... let's not worry about it yet... this code
+    //       should be correct.
+
+    // read the orec
+    gtm_word o = o_oreclazy_mg.orecs[orec].load(memory_order_relaxed);
+
+    // if locked by self, do nothing and return
+    if (likely (locked_by_tx != o))
       {
-        // Load the orec.  Relaxed memory order is sufficient here because
-        // either we have acquired the orec or we will try to acquire it with
-        // a CAS with stronger memory order.
-        gtm_word o = o_oreclazy_mg.orecs[orec].load(memory_order_relaxed);
+	// if locked by other, self-abort
+	if (unlikely (oreclazy_mg::is_locked(o)))
+	  tx->restart(RESTART_LOCKED_WRITE);
+	// if unlocked but too new, abort, because we're in commit code...
+	if (unlikely (oreclazy_mg::get_time(o) > snapshot))
+	  tx->restart(RESTART_LOCKED_WRITE); // TODO: change abort reason
 
-        // Check whether we have acquired the orec already.
-        if (likely (locked_by_tx != o))
-          {
-            // If not, acquire.  Make sure that our snapshot time is larger or
-            // equal than the orec's version to avoid masking invalidations of
-            // our snapshot with our own writes.
-            if (unlikely (oreclazy_mg::is_locked(o)))
-              tx->restart(RESTART_LOCKED_WRITE);
-
-            if (unlikely (oreclazy_mg::get_time(o) > snapshot))
-              {
-                // We only need to extend the snapshot if we have indeed read
-                // from this orec before.  Given that we are an update
-                // transaction, we will have to extend anyway during commit.
-                // ??? Scan the read log instead, aborting if we have read
-                // from data covered by this orec before?
-                snapshot = extend(tx);
-              }
-
-            // We need acquire memory order here to synchronize with other
-            // (ownership) releases of the orec.  We do not need acq_rel order
-            // because whenever another thread reads from this CAS'
-            // modification, then it will abort anyway and does not rely on
-            // any further happens-before relation to be established.
-            if (unlikely (!o_oreclazy_mg.orecs[orec].compare_exchange_strong(
+	// We need acquire memory order here to synchronize with other
+	// (ownership) releases of the orec.  We do not need acq_rel order
+	// because whenever another thread reads from this CAS'
+	// modification, then it will abort anyway and does not rely on
+	// any further happens-before relation to be established.
+	if (unlikely (!o_oreclazy_mg.orecs[orec].compare_exchange_strong(
                 o, locked_by_tx, memory_order_acquire)))
               tx->restart(RESTART_LOCKED_WRITE);
 
-            // We use an explicit fence here to avoid having to use release
-            // memory order for all subsequent data stores.  This fence will
-            // synchronize with loads of the data with acquire memory order.
-            // See post_load() for why this is necessary.
-            // Adding require memory order to the prior CAS is not sufficient,
-            // at least according to the Batty et al. formalization of the
-            // memory model.
-            atomic_thread_fence(memory_order_release);
+	// We use an explicit fence here to avoid having to use release
+	// memory order for all subsequent data stores.  This fence will
+	// synchronize with loads of the data with acquire memory order.
+	// See post_load() for why this is necessary.
+	// Adding require memory order to the prior CAS is not sufficient,
+	// at least according to the Batty et al. formalization of the
+	// memory model.
+	atomic_thread_fence(memory_order_release);
 
-            // We log the previous value here to be able to use incarnation
-            // numbers when we have to roll back.
-            // ??? Reserve capacity early to avoid capacity checks here?
-            gtm_rwlog_entry *e = tx->writelog.push();
-            e->orec = o_oreclazy_mg.orecs + orec;
-            e->value = o;
-          }
-        orec = o_oreclazy_mg.get_next_orec(orec);
+	// log the orec we just acquired
+	gtm_rwlog_entry *e = tx->writelog.push();
+	e->orec = o_oreclazy_mg.orecs + orec;
+	e->value = o;
       }
-    while (orec != orec_end);
-
-    // Do undo logging.  We do not know which region prior writes logged
-    // (even if orecs have been acquired), so just log everything.
-    tx->undolog.log(addr, len);
-  }
-
-  static void pre_write(const void *addr, size_t len)
-  {
-    gtm_thread *tx = gtm_thr();
-    pre_write(tx, addr, len);
   }
 
   // Returns true iff all the orecs in our read log still have the same time
   // or have been locked by the transaction itself.
+  //
+  // NB: this relies on the above pre_write code never locking a
+  // location whose timestamp is too new.
   static bool validate(gtm_thread *tx)
   {
     gtm_word locked_by_tx = oreclazy_mg::set_locked(tx);
@@ -273,8 +266,8 @@ protected:
     // Don't obtain an iterator yet because the log might get resized.
     size_t log_start = tx->readlog.size();
     gtm_word snapshot = tx->shared_state.load(memory_order_relaxed);
-    gtm_word locked_by_tx = oreclazy_mg::set_locked(tx);
 
+    // TODO: probably not safe... should iterate over addresses
     size_t orec = oreclazy_mg::get_orec(addr);
     size_t orec_end = oreclazy_mg::get_orec_end(addr, len);
     do
@@ -303,10 +296,8 @@ protected:
           }
         else
           {
-            // If the orec is locked by us, just skip it because we can just
-            // read from it.  Otherwise, restart the transaction.
-            if (o != locked_by_tx)
-              tx->restart(RESTART_LOCKED_READ);
+	    // if it's locked, it's not by us, so abort... could wait here, as in patientTM
+	    tx->restart(RESTART_LOCKED_READ);
           }
         orec = o_oreclazy_mg.get_next_orec(orec);
       }
@@ -345,18 +336,17 @@ protected:
 
   template <typename V> static V load(const V* addr, ls_modifier mod)
   {
-    // Read-for-write should be unlikely, but we need to handle it or will
-    // break later WaW optimizations.
-    if (unlikely(mod == RfW))
-      {
-    pre_write(addr, sizeof(V));
-    return *addr;
-      }
-    if (unlikely(mod == RaW))
-      return *addr;
-    // ??? Optimize for RaR?
-
     gtm_thread *tx = gtm_thr();
+
+    // NB: rfw is meaningless in lazy tm
+
+    // NB: we can't trust RaW, since we might not get a hint on every
+    // RaW, so do a lookup every time
+    V v;
+    if (!tx->redolog_bst.isEmpty() && tx->redolog_bst.find(addr, v) != 0)
+      return v; // NB: 'v' passed by reference to find()
+
+    // pre-check the orecs
     gtm_rwlog_entry* log = pre_load(tx, addr, sizeof(V));
 
     // Load the data.
@@ -374,7 +364,9 @@ protected:
     // Instead of the following, just use an ordinary load followed by an
     // acquire fence, and hope that this is good enough for now:
     // V v = atomic_load_explicit((atomic<V>*)addr, memory_order_acquire);
-    V v = *addr;
+    //
+    // [mfs] I don't think the post-load fence is enough for POWER
+    v = *addr;
     atomic_thread_fence(memory_order_acquire);
 
     // ??? Retry the whole load if it wasn't consistent?
@@ -386,69 +378,38 @@ protected:
   template <typename V> static void store(V* addr, const V value,
       ls_modifier mod)
   {
-    if (likely(mod != WaW))
-      pre_write(addr, sizeof(V));
-    // FIXME We would need an atomic store here but we can't just forge an
-    // atomic load for nonatomic data because this might not work on all
-    // implementations of atomics.  However, we need this store to link the
-    // release fence in pre_write() to the acquire operation in load, which
-    // is only guaranteed if we have a reads-from relation between atomic
-    // accesses.  Also, the compiler is allowed to optimize nonatomic accesses
-    // differently than atomic accesses (e.g., if the store would be moved
-    // to before the release fence in pre_write(), things could go wrong).
-    // atomic_store_explicit((atomic<V>*)addr, value, memory_order_relaxed);
-    *addr = value;
+    gtm_thread *tx = gtm_thr();
+    tx->redolog_bst.insert(addr, value);
   }
 
 public:
   static void memtransfer_static(void *dst, const void* src, size_t size,
       bool may_overlap, ls_modifier dst_mod, ls_modifier src_mod)
   {
-    gtm_rwlog_entry* log = 0;
-    gtm_thread *tx = 0;
-
-    if (src_mod == RfW)
-      {
-        tx = gtm_thr();
-        pre_write(tx, src, size);
-      }
-    else if (src_mod != RaW && src_mod != NONTXNAL)
-      {
-        tx = gtm_thr();
-        log = pre_load(tx, src, size);
-      }
-    // ??? Optimize for RaR?
-
-    if (dst_mod != NONTXNAL && dst_mod != WaW)
-      {
-        if (src_mod != RfW && (src_mod == RaW || src_mod == NONTXNAL))
-          tx = gtm_thr();
-        pre_write(tx, dst, size);
-      }
-
-    // FIXME We should use atomics here (see store()).  Let's just hope that
-    // memcpy/memmove are good enough.
-    if (!may_overlap)
-      ::memcpy(dst, src, size);
-    else
-      ::memmove(dst, src, size);
-
-    // ??? Retry the whole memtransfer if it wasn't consistent?
-    if (src_mod != RfW && src_mod != RaW && src_mod != NONTXNAL)
-      {
-    // See load() for why we need the acquire fence here.
-    atomic_thread_fence(memory_order_acquire);
-    post_load(tx, log);
-      }
+    // [mfs] TODO: this is definitely not optimal
+    unsigned char* srcaddr = (unsigned char*)const_cast<void*>(src);
+    unsigned char* dstaddr = (unsigned char*)dst;
+    
+    // load and store
+    for (size_t i = 0; i < size; i++) {
+      unsigned char temp = load<unsigned char>(srcaddr, RaR);
+      store<unsigned char>(dstaddr, temp, WaW);
+      dstaddr = (unsigned char*) ((long long)dstaddr + sizeof(unsigned char));
+      srcaddr = (unsigned char*) ((long long)srcaddr + sizeof(unsigned char));
+    }
   }
 
   static void memset_static(void *dst, int c, size_t size, ls_modifier mod)
   {
-    if (mod != WaW)
-      pre_write(dst, size);
-    // FIXME We should use atomics here (see store()).  Let's just hope that
-    // memset is good enough.
-    ::memset(dst, c, size);
+    // again, not optimal
+    gtm_thread* tx = gtm_thr();
+    unsigned char* dstaddr = (unsigned char*)dst;
+
+    // save data into redo log
+    for(size_t it = 0; it < size; it++) {
+      tx->redolog_bst.insert(dstaddr, (unsigned char)c);
+      dstaddr = (unsigned char*) ((long long)dst + sizeof(unsigned char));
+    }
   }
 
   virtual gtm_restart_reason begin_or_restart()
@@ -484,10 +445,23 @@ public:
     gtm_thread* tx = gtm_thr();
 
     // If we haven't updated anything, we can commit.
-    if (!tx->writelog.size())
+    if (tx->redolog_bst.isEmpty()) {
+      tx->readlog.clear();
+      return true;
+    }
+
+    // lock all orecs.  Note that we iterate over addresses, not orecs
+    for (int i = 0; i < tx->redolog_bst.slabcount(); ++i) 
       {
-        tx->readlog.clear();
-        return true;
+	uint64_t mask = tx->redolog_bst.get_mask(i);
+	uint8_t* addr = (uint8_t*)tx->redolog_bst.get_key(i);
+	while (mask) 
+	  {
+	    if (mask & 1)
+	      pre_write(tx, addr);
+	    mask >>= 1;
+	    addr++;
+	  }
       }
 
     // Get a commit time.
@@ -507,6 +481,9 @@ public:
     if (snapshot < ct - 1 && !validate(tx))
       return false;
 
+    // replay redo log
+    tx->redolog_bst.writeback();
+
     // Release orecs.
     // See pre_load() / post_load() for why we need release memory order.
     // ??? Can we use a release fence and relaxed stores?
@@ -518,6 +495,7 @@ public:
     // We're done, clear the logs.
     tx->writelog.clear();
     tx->readlog.clear();
+    tx->redolog_bst.reset(); // [mfs] TODO: rename to clear()?
 
     // Need to ensure privatization safety. Every other transaction must
     // have a snapshot time that is at least as high as our commit time
@@ -537,45 +515,32 @@ public:
       return;
 
     gtm_thread *tx = gtm_thr();
-    gtm_word overflow_value = 0;
 
+    // [mfs] This is easier than in ml_wt, because we don't need to
+    // worry about incarnation numbers
+
+    // TODO: add fast-path that skips release for transactions that
+    // haven't reached commit point yet?
+    
     // Release orecs.
     for (gtm_rwlog_entry *i = tx->writelog.begin(), *ie = tx->writelog.end();
         i != ie; i++)
       {
-        // If possible, just increase the incarnation number.
-        // See pre_load() / post_load() for why we need release memory order.
-    // ??? Can we use a release fence and relaxed stores?  (Same below.)
-        if (oreclazy_mg::has_incarnation_left(i->value))
-          i->orec->store(oreclazy_mg::inc_incarnation(i->value),
-              memory_order_release);
-        else
-          {
-            // We have an incarnation overflow.  Acquire a new timestamp, and
-            // use it from now on as value for each orec whose incarnation
-            // number cannot be increased.
-            // Overflow of o_oreclazy_mg.time is prevented in begin_or_restart().
-            // See pre_load() / post_load() for why we need release memory
-            // order.
-            if (!overflow_value)
-              // Release memory order is sufficient but required here.
-              // In contrast to the increment in trycommit(), we need release
-              // for the same reason but do not need the acquire because we
-              // do not validate subsequently.
-              overflow_value = oreclazy_mg::set_time(
-                  o_oreclazy_mg.time.fetch_add(1, memory_order_release) + 1);
-            i->orec->store(overflow_value, memory_order_release);
-          }
+	// [mfs] TODO: do we need this much ordering?
+	i->orec->store(i->value, memory_order_release);
       }
 
     // We need this release fence to ensure that privatizers see the
     // rolled-back original state (not any uncommitted values) when they read
     // the new snapshot time that we write in begin_or_restart().
+    //
+    // [mfs] TODO: is this still needed?
     atomic_thread_fence(memory_order_release);
 
     // We're done, clear the logs.
     tx->writelog.clear();
     tx->readlog.clear();
+    tx->redolog_bst.reset();
   }
 
   virtual bool supports(unsigned number_of_threads)

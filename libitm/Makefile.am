@@ -61,7 +61,7 @@ libitm_la_SOURCES = \
 	clone.cc eh_cpp.cc local.cc \
 	query.cc retry.cc rwlock.cc useraction.cc util.cc \
 	sjlj.S tls.cc method-serial.cc method-gl.cc method-ml.cc \
-	method-oreclazy.cc
+	method-oreclazy.cc bst.cc
 
 if ARCH_ARM
 libitm_la_SOURCES += hwcap.cc

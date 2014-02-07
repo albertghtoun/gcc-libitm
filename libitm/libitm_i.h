@@ -88,6 +88,8 @@ enum gtm_restart_reason
 #include "dispatch.h"
 #include "containers.h"
 
+#include "bst.h"
+
 #ifdef __USER_LABEL_PREFIX__
 # define UPFX UPFX1(__USER_LABEL_PREFIX__)
 # define UPFX1(t) UPFX2(t)
@@ -189,6 +191,9 @@ struct gtm_thread
 
   // Data used by local.c for the undo log for both local and shared memory.
   gtm_undolog undolog;
+
+  // Data used for the redo log for oreclazy
+  BST redolog_bst;
 
   // Read and write logs.  Used by multi-lock TM methods.
   vector<gtm_rwlog_entry> readlog;
