@@ -99,6 +99,7 @@ package body Sem_Ch3 is
    --    Async_Writers
    --    Effective_Reads
    --    Effective_Writes
+   --    Part_Of
 
    procedure Build_Derived_Type
      (N             : Node_Id;
@@ -2086,12 +2087,6 @@ package body Sem_Ch3 is
       --  If the states have visible refinement, remove the visibility of each
       --  constituent at the end of the package body declarations.
 
-      function Requires_State_Refinement
-        (Spec_Id : Entity_Id;
-         Body_Id : Entity_Id) return Boolean;
-      --  Determine whether a package denoted by its spec and body entities
-      --  requires refinement of abstract states.
-
       -----------------
       -- Adjust_Decl --
       -----------------
@@ -2124,8 +2119,8 @@ package body Sem_Ch3 is
          --  spec analysis.
 
       begin
-         --  Consider only procedure bodies whose name matches one of type
-         --  [Limited_]Controlled's primitives.
+         --  Consider only procedure bodies whose name matches one of the three
+         --  controlled primitives.
 
          if Nkind (Body_Spec) /= N_Procedure_Specification
            or else not Nam_In (Chars (Body_Id), Name_Adjust,
@@ -2134,14 +2129,15 @@ package body Sem_Ch3 is
          then
             return;
 
-         --  A controlled primitive must have exactly one formal whose type
-         --  derives from [Limited_]Controlled.
+         --  A controlled primitive must have exactly one formal
 
          elsif List_Length (Params) /= 1 then
             return;
          end if;
 
          Dummy := Analyze_Subprogram_Specification (Body_Spec);
+
+         --  The type of the formal must be derived from [Limited_]Controlled
 
          if not Is_Controlled (Etype (Defining_Entity (First (Params)))) then
             return;
@@ -2157,12 +2153,16 @@ package body Sem_Ch3 is
          end if;
 
          --  At this point the body is known to be a late controlled primitive.
-         --  Generate a matching spec and insert it before the body.
+         --  Generate a matching spec and insert it before the body. Note the
+         --  use of Copy_Separate_Tree - we want an entirely separate semantic
+         --  tree in this case.
 
-         Spec := New_Copy_Tree (Body_Spec);
+         Spec := Copy_Separate_Tree (Body_Spec);
 
-         Set_Defining_Unit_Name
-           (Spec, Make_Defining_Identifier (Loc, Chars (Body_Id)));
+         --  Ensure that the subprogram declaration does not inherit the null
+         --  indicator from the body as we now have a proper spec/body pair.
+
+         Set_Null_Present (Spec, False);
 
          Insert_Before_And_Analyze (Body_Decl,
            Make_Subprogram_Declaration (Loc,
@@ -2185,89 +2185,11 @@ package body Sem_Ch3 is
          end if;
       end Remove_Visible_Refinements;
 
-      -------------------------------
-      -- Requires_State_Refinement --
-      -------------------------------
-
-      function Requires_State_Refinement
-        (Spec_Id : Entity_Id;
-         Body_Id : Entity_Id) return Boolean
-      is
-         function Mode_Is_Off (Prag : Node_Id) return Boolean;
-         --  Given pragma SPARK_Mode, determine whether the mode is Off
-
-         -----------------
-         -- Mode_Is_Off --
-         -----------------
-
-         function Mode_Is_Off (Prag : Node_Id) return Boolean is
-            Mode : Node_Id;
-
-         begin
-            --  The default SPARK mode is On
-
-            if No (Prag) then
-               return False;
-            end if;
-
-            Mode :=
-              Get_Pragma_Arg (First (Pragma_Argument_Associations (Prag)));
-
-            --  Then the pragma lacks an argument, the default mode is On
-
-            if No (Mode) then
-               return False;
-            else
-               return Chars (Mode) = Name_Off;
-            end if;
-         end Mode_Is_Off;
-
-      --  Start of processing for Requires_State_Refinement
-
-      begin
-         --  A package that does not define at least one abstract state cannot
-         --  possibly require refinement.
-
-         if No (Abstract_States (Spec_Id)) then
-            return False;
-
-         --  The package instroduces a single null state which does not merit
-         --  refinement.
-
-         elsif Has_Null_Abstract_State (Spec_Id) then
-            return False;
-
-         --  Check whether the package body is subject to pragma SPARK_Mode. If
-         --  it is and the mode is Off, the package body is considered to be in
-         --  regular Ada and does not require refinement.
-
-         elsif Mode_Is_Off (SPARK_Pragma (Body_Id)) then
-            return False;
-
-         --  The body's SPARK_Mode may be inherited from a similar pragma that
-         --  appears in the private declarations of the spec. The pragma we are
-         --  interested appears as the second entry in SPARK_Pragma.
-
-         elsif Present (SPARK_Pragma (Spec_Id))
-           and then Mode_Is_Off (Next_Pragma (SPARK_Pragma (Spec_Id)))
-         then
-            return False;
-
-         --  The spec defines at least one abstract state and the body has no
-         --  way of circumventing the refinement.
-
-         else
-            return True;
-         end if;
-      end Requires_State_Refinement;
-
       --  Local variables
 
-      Body_Id     : Entity_Id;
       Context     : Node_Id;
       Freeze_From : Entity_Id := Empty;
       Next_Decl   : Node_Id;
-      Prag        : Node_Id;
       Spec_Id     : Entity_Id;
 
       Body_Seen : Boolean := False;
@@ -2415,54 +2337,21 @@ package body Sem_Ch3 is
          Decl := Next_Decl;
       end loop;
 
+      --  Analyze the contracts of packages and their bodies
+
       if Present (L) then
          Context := Parent (L);
-
-         --  Analyze pragmas Initializes and Initial_Condition of a package at
-         --  the end of the visible declarations as the pragmas have visibility
-         --  over the said region.
 
          if Nkind (Context) = N_Package_Specification
            and then L = Visible_Declarations (Context)
          then
-            Spec_Id := Defining_Entity (Parent (Context));
-            Prag    := Get_Pragma (Spec_Id, Pragma_Initializes);
-
-            if Present (Prag) then
-               Analyze_Initializes_In_Decl_Part (Prag);
-            end if;
-
-            Prag := Get_Pragma (Spec_Id, Pragma_Initial_Condition);
-
-            if Present (Prag) then
-               Analyze_Initial_Condition_In_Decl_Part (Prag);
-            end if;
-
-         --  Analyze the state refinements within a package body now, after
-         --  all hidden states have been encountered and freely visible.
-         --  Refinements must be processed before pragmas Refined_Depends and
-         --  Refined_Global because the last two may mention constituents.
+            Analyze_Package_Contract (Defining_Entity (Context));
 
          elsif Nkind (Context) = N_Package_Body then
             In_Package_Body := True;
-
-            Body_Id := Defining_Entity (Context);
             Spec_Id := Corresponding_Spec (Context);
-            Prag    := Get_Pragma (Body_Id, Pragma_Refined_State);
 
-            --  The analysis of pragma Refined_State detects whether the spec
-            --  has abstract states available for refinement.
-
-            if Present (Prag) then
-               Analyze_Refined_State_In_Decl_Part (Prag);
-
-            --  State refinement is required when the package declaration has
-            --  abstract states. Null states are not considered.
-
-            elsif Requires_State_Refinement (Spec_Id, Body_Id) then
-               Error_Msg_NE
-                 ("package & requires state refinement", Context, Spec_Id);
-            end if;
+            Analyze_Package_Body_Contract (Defining_Entity (Context));
          end if;
       end if;
 
@@ -2472,14 +2361,14 @@ package body Sem_Ch3 is
 
       Decl := First (L);
       while Present (Decl) loop
-         if Nkind (Decl) = N_Subprogram_Body then
+         if Nkind (Decl) = N_Object_Declaration then
+            Analyze_Object_Contract (Defining_Entity (Decl));
+
+         elsif Nkind (Decl) = N_Subprogram_Body then
             Analyze_Subprogram_Body_Contract (Defining_Entity (Decl));
 
          elsif Nkind (Decl) = N_Subprogram_Declaration then
             Analyze_Subprogram_Contract (Defining_Entity (Decl));
-
-         elsif Nkind (Decl) = N_Object_Declaration then
-            Analyze_Object_Contract (Defining_Entity (Decl));
          end if;
 
          Next (Decl);
@@ -3078,8 +2967,6 @@ package body Sem_Ch3 is
       AW_Val : Boolean := False;
       ER_Val : Boolean := False;
       EW_Val : Boolean := False;
-      Items  : Node_Id;
-      Nam    : Name_Id;
       Prag   : Node_Id;
       Seen   : Boolean := False;
 
@@ -3127,44 +3014,49 @@ package body Sem_Ch3 is
             end if;
          end if;
 
-         --  Examine the contract
+         --  Analyze all external properties
 
-         Items := Contract (Obj_Id);
+         Prag := Get_Pragma (Obj_Id, Pragma_Async_Readers);
 
-         if Present (Items) then
-
-            --  Analyze classification pragmas
-
-            Prag := Classifications (Items);
-            while Present (Prag) loop
-               Nam := Pragma_Name (Prag);
-
-               if Nam = Name_Async_Readers then
-                  Analyze_External_Property_In_Decl_Part (Prag, AR_Val);
-                  Seen := True;
-
-               elsif Nam = Name_Async_Writers then
-                  Analyze_External_Property_In_Decl_Part (Prag, AW_Val);
-                  Seen := True;
-
-               elsif Nam = Name_Effective_Reads then
-                  Analyze_External_Property_In_Decl_Part (Prag, ER_Val);
-                  Seen := True;
-
-               else pragma Assert (Nam = Name_Effective_Writes);
-                  Analyze_External_Property_In_Decl_Part (Prag, EW_Val);
-                  Seen := True;
-               end if;
-
-               Prag := Next_Pragma (Prag);
-            end loop;
+         if Present (Prag) then
+            Analyze_External_Property_In_Decl_Part (Prag, AR_Val);
+            Seen := True;
          end if;
 
-         --  Once all external properties have been processed, verify their
-         --  mutual interaction.
+         Prag := Get_Pragma (Obj_Id, Pragma_Async_Writers);
+
+         if Present (Prag) then
+            Analyze_External_Property_In_Decl_Part (Prag, AW_Val);
+            Seen := True;
+         end if;
+
+         Prag := Get_Pragma (Obj_Id, Pragma_Effective_Reads);
+
+         if Present (Prag) then
+            Analyze_External_Property_In_Decl_Part (Prag, ER_Val);
+            Seen := True;
+         end if;
+
+         Prag := Get_Pragma (Obj_Id, Pragma_Effective_Writes);
+
+         if Present (Prag) then
+            Analyze_External_Property_In_Decl_Part (Prag, EW_Val);
+            Seen := True;
+         end if;
+
+         --  Verify the mutual interaction of the various external properties
 
          if Seen then
             Check_External_Properties (Obj_Id, AR_Val, AW_Val, ER_Val, EW_Val);
+         end if;
+
+         --  Check whether the lack of indicator Part_Of agrees with the
+         --  placement of the variable with respect to the state space.
+
+         Prag := Get_Pragma (Obj_Id, Pragma_Part_Of);
+
+         if No (Prag) then
+            Check_Missing_Part_Of (Obj_Id);
          end if;
       end if;
    end Analyze_Object_Contract;
@@ -3659,10 +3551,13 @@ package body Sem_Ch3 is
 
       --  We need a predicate check if the type has predicates, and if either
       --  there is an initializing expression, or for default initialization
-      --  when we have at least one case of an explicit default initial value.
+      --  when we have at least one case of an explicit default initial value
+      --  and then this is not an internal declaration whose initialization
+      --  comes later (as for an aggregate expansion).
 
       if not Suppress_Assignment_Checks (N)
         and then Present (Predicate_Function (T))
+        and then not No_Initialization (N)
         and then
           (Present (E)
             or else
@@ -3990,7 +3885,7 @@ package body Sem_Ch3 is
 
          --  If not library level entity, then indicate we don't know max
          --  tasks and also check task hierarchy restriction and blocking
-         --  operation (since starting a task is definitely blocking!)
+         --  operation (since starting a task is definitely blocking).
 
          else
             Check_Restriction (Max_Tasks, N);
@@ -4117,7 +4012,7 @@ package body Sem_Ch3 is
       --  common destination for legal and illegal object declarations.
 
       if Ekind (Id) = E_Variable then
-         Set_Refined_State (Id, Empty);
+         Set_Encapsulating_State (Id, Empty);
       end if;
 
       if Has_Aspects (N) then
@@ -4855,7 +4750,7 @@ package body Sem_Ch3 is
       --  record.
 
       elsif Ekind (Scope (Id)) /= E_Protected_Type
-        and then Present (Scope (Scope (Id))) -- error defense!
+        and then Present (Scope (Scope (Id))) -- error defense
         and then Ekind (Scope (Scope (Id))) /= E_Protected_Type
       then
          Conditional_Delay (Id, T);
@@ -9258,8 +9153,8 @@ package body Sem_Ch3 is
       --  be unanalyzed at this point? and if it is, what business do we
       --  have messing around with it? and why is the base type of the
       --  parent type the right type for the resolution. It probably is
-      --  not! It is OK for the new bound we are creating, but not for
-      --  the old one??? Still if it never happens, no problem!
+      --  not. It is OK for the new bound we are creating, but not for
+      --  the old one??? Still if it never happens, no problem.
 
       Analyze_And_Resolve (Bound, Base_Type (Par_T));
 
@@ -10793,7 +10688,7 @@ package body Sem_Ch3 is
       Set_Is_Itype         (Full);
 
       --  A subtype of a private-type-without-discriminants, whose full-view
-      --  has discriminants with default expressions, is not constrained!
+      --  has discriminants with default expressions, is not constrained.
 
       if not Has_Discriminants (Priv) then
          Set_Is_Constrained (Full, Is_Constrained (Full_Base));
@@ -12179,7 +12074,7 @@ package body Sem_Ch3 is
       procedure Fixup_Bad_Constraint;
       --  This is called after finding a bad constraint, and after having
       --  posted an appropriate error message. The mission is to leave the
-      --  entity T in as reasonable state as possible!
+      --  entity T in as reasonable state as possible.
 
       --------------------------
       -- Fixup_Bad_Constraint --
@@ -12354,7 +12249,7 @@ package body Sem_Ch3 is
 
          --  Check that digits value is in range. Obviously we can do this
          --  at compile time, but it is strictly a runtime check, and of
-         --  course there is an ACVC test that checks this!
+         --  course there is an ACVC test that checks this.
 
          if Digits_Value (Def_Id) > Digits_Value (T) then
             Error_Msg_Uint_1 := Digits_Value (T);
@@ -12581,7 +12476,7 @@ package body Sem_Ch3 is
 
          --  Check that delta value is in range. Obviously we can do this
          --  at compile time, but it is strictly a runtime check, and of
-         --  course there is an ACVC test that checks this!
+         --  course there is an ACVC test that checks this.
 
          if Delta_Value (Def_Id) < Delta_Value (T) then
             Error_Msg_N ("??delta value is too small", D);
@@ -12957,7 +12852,7 @@ package body Sem_Ch3 is
          --  Set the parent so we have a proper link for freezing etc. This is
          --  not a real parent pointer, since of course our parent does not own
          --  up to us and reference us, we are an illegitimate child of the
-         --  original parent!
+         --  original parent.
 
          Set_Parent (New_Compon, Parent (Old_Compon));
 
@@ -15885,8 +15780,12 @@ package body Sem_Ch3 is
            and then No (Expression (P))
          then
             null;
+
+         --  Here we freeze the base type of object type to catch premature use
+         --  of discriminated private type without a full view.
+
          else
-            Insert_Actions (Obj_Def, Freeze_Entity (T, P));
+            Insert_Actions (Obj_Def, Freeze_Entity (Base_Type (T), P));
          end if;
 
       --  Ada 2005 AI-406: the object definition in an object declaration
@@ -17458,7 +17357,7 @@ package body Sem_Ch3 is
 
    begin
       --  If the mod expression is (exactly) 2 * literal, where literal is
-      --  64 or less,then almost certainly the * was meant to be **. Warn!
+      --  64 or less,then almost certainly the * was meant to be **. Warn.
 
       if Warn_On_Suspicious_Modulus_Value
         and then Nkind (Mod_Expr) = N_Op_Multiply
@@ -17504,7 +17403,7 @@ package body Sem_Ch3 is
 
       --  Properly analyze the literals for the range. We do this manually
       --  because we can't go calling Resolve, since we are resolving these
-      --  bounds with the type, and this type is certainly not complete yet!
+      --  bounds with the type, and this type is certainly not complete yet.
 
       Set_Etype (Low_Bound  (Scalar_Range (T)), T);
       Set_Etype (High_Bound (Scalar_Range (T)), T);
@@ -18788,7 +18687,7 @@ package body Sem_Ch3 is
          end;
       end if;
 
-      --  Ada 2005 AI 161: Check preelaboratable initialization consistency
+      --  Ada 2005 AI 161: Check preelaborable initialization consistency
 
       if Known_To_Have_Preelab_Init (Priv_T) then
 
@@ -18850,10 +18749,16 @@ package body Sem_Ch3 is
          Set_Has_Inheritable_Invariants (Full_T);
       end if;
 
-      --  Propagate predicates to full type
+      --  Propagate predicates to full type, and predicate function if already
+      --  defined. It is not clear that this can actually happen? the partial
+      --  view cannot be frozen yet, and the predicate function has not been
+      --  built. Still it is a cheap check and seems safer to make it.
 
       if Has_Predicates (Priv_T) then
-         Set_Predicate_Function (Priv_T, Predicate_Function (Full_T));
+         if Present (Predicate_Function (Priv_T)) then
+            Set_Predicate_Function (Full_T, Predicate_Function (Priv_T));
+         end if;
+
          Set_Has_Predicates (Full_T);
       end if;
    end Process_Full_View;

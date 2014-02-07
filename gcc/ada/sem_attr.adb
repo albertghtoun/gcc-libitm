@@ -396,6 +396,13 @@ package body Sem_Attr is
       --  Common processing for attributes Definite and Has_Discriminants.
       --  Checks that prefix is generic indefinite formal type.
 
+      procedure Max_Alignment_For_Allocation_Max_Size_In_Storage_Elements;
+      --  Common processing for attributes Max_Alignment_For_Allocation and
+      --  Max_Size_In_Storage_Elements.
+
+      procedure Min_Max;
+      --  Common processing for attributes Max and Min
+
       procedure Standard_Attribute (Val : Int);
       --  Used to process attributes whose prefix is package Standard which
       --  yield values of type Universal_Integer. The attribute reference
@@ -2188,6 +2195,40 @@ package body Sem_Attr is
 
          Set_Etype (N, Standard_Boolean);
       end Legal_Formal_Attribute;
+
+      ---------------------------------------------------------------
+      -- Max_Alignment_For_Allocation_Max_Size_In_Storage_Elements --
+      ---------------------------------------------------------------
+
+      procedure Max_Alignment_For_Allocation_Max_Size_In_Storage_Elements is
+      begin
+         Check_E0;
+         Check_Type;
+         Check_Not_Incomplete_Type;
+         Set_Etype (N, Universal_Integer);
+      end Max_Alignment_For_Allocation_Max_Size_In_Storage_Elements;
+
+      -------------
+      -- Min_Max --
+      -------------
+
+      procedure Min_Max is
+      begin
+         Check_E2;
+         Check_Scalar_Type;
+         Resolve (E1, P_Base_Type);
+         Resolve (E2, P_Base_Type);
+         Set_Etype (N, P_Base_Type);
+
+         --  Check for comparison on unordered enumeration type
+
+         if Bad_Unordered_Enumeration_Reference (N, P_Base_Type) then
+            Error_Msg_Sloc := Sloc (P_Base_Type);
+            Error_Msg_NE
+              ("comparison on unordered enumeration type& declared#?U?",
+               N, P_Base_Type);
+         end if;
+      end Min_Max;
 
       ------------------------
       -- Standard_Attribute --
@@ -4107,23 +4148,21 @@ package body Sem_Attr is
       ---------
 
       when Attribute_Max =>
-         Check_E2;
-         Check_Scalar_Type;
-         Resolve (E1, P_Base_Type);
-         Resolve (E2, P_Base_Type);
-         Set_Etype (N, P_Base_Type);
+         Min_Max;
 
       ----------------------------------
       -- Max_Alignment_For_Allocation --
+      ----------------------------------
+
+      when Attribute_Max_Size_In_Storage_Elements =>
+         Max_Alignment_For_Allocation_Max_Size_In_Storage_Elements;
+
+      ----------------------------------
       -- Max_Size_In_Storage_Elements --
       ----------------------------------
 
-      when Attribute_Max_Alignment_For_Allocation |
-        Attribute_Max_Size_In_Storage_Elements =>
-         Check_E0;
-         Check_Type;
-         Check_Not_Incomplete_Type;
-         Set_Etype (N, Universal_Integer);
+      when Attribute_Max_Alignment_For_Allocation =>
+         Max_Alignment_For_Allocation_Max_Size_In_Storage_Elements;
 
       -----------------------
       -- Maximum_Alignment --
@@ -4168,11 +4207,7 @@ package body Sem_Attr is
       ---------
 
       when Attribute_Min =>
-         Check_E2;
-         Check_Scalar_Type;
-         Resolve (E1, P_Base_Type);
-         Resolve (E2, P_Base_Type);
-         Set_Etype (N, P_Base_Type);
+         Min_Max;
 
       ---------
       -- Mod --
@@ -6014,10 +6049,11 @@ package body Sem_Attr is
             while Present (Comp_Or_Discr) loop
                if Chars (Comp_Or_Discr) = Comp_Name then
 
-                  --  Record component entity in the given aggregate choice,
-                  --  for subsequent resolution.
+                  --  Record component entity and type in the given aggregate
+                  --  choice, for subsequent resolution.
 
                   Set_Entity (Comp, Comp_Or_Discr);
+                  Set_Etype  (Comp, Etype (Comp_Or_Discr));
                   exit;
                end if;
 
@@ -6148,7 +6184,16 @@ package body Sem_Attr is
                   end;
 
                elsif Is_Record_Type (P_Type) then
-                  Check_Component_Reference (Comp, P_Type);
+
+                  --  Make sure we have an identifier. Old SPARK allowed
+                  --  a component selection e.g. A.B in the corresponding
+                  --  context, but we do not yet permit this for 'Update.
+
+                  if Nkind (Comp) /= N_Identifier then
+                     Error_Msg_N ("name should be identifier or OTHERS", Comp);
+                  else
+                     Check_Component_Reference (Comp, P_Type);
+                  end if;
                end if;
 
                Next (Comp);
@@ -6183,7 +6228,7 @@ package body Sem_Attr is
 
          --  Note, we need a range check in general, but we wait for the
          --  Resolve call to do this, since we want to let Eval_Attribute
-         --  have a chance to find an static illegality first!
+         --  have a chance to find an static illegality first.
       end Val;
 
       -----------
@@ -6726,7 +6771,7 @@ package body Sem_Attr is
 
          --  Note that the whole point of the E_String_Literal_Subtype is to
          --  avoid this construction of bounds, but the cases in which we
-         --  have to materialize them are rare enough that we don't worry!
+         --  have to materialize them are rare enough that we don't worry.
 
          --  The low bound is simply the low bound of the base type. The
          --  high bound is computed from the length of the string and this
@@ -6776,7 +6821,7 @@ package body Sem_Attr is
             end loop;
 
             --  If no index type, get out (some other error occurred, and
-            --  we don't have enough information to complete the job!)
+            --  we don't have enough information to complete the job).
 
             if No (Indx) then
                Lo_Bound := Error;
@@ -9075,7 +9120,7 @@ package body Sem_Attr is
 
                         if J > 255 then
 
-                           --  No need to compute this more than once!
+                           --  No need to compute this more than once
 
                            exit;
 
@@ -10444,7 +10489,7 @@ package body Sem_Attr is
          -----------------
 
          --  Prefix must not be resolved in this case, since it is not a
-         --  real entity reference. No action of any kind is require!
+         --  real entity reference. No action of any kind is require.
 
          when Attribute_UET_Address =>
             return;
@@ -10533,7 +10578,7 @@ package body Sem_Attr is
 
             --  Eval_Attribute may replace the node with a raise CE, or
             --  fold it to a constant. Obviously we only apply a scalar
-            --  range check if this did not happen!
+            --  range check if this did not happen.
 
             if Nkind (N) = N_Attribute_Reference
               and then Attribute_Name (N) = Name_Val
